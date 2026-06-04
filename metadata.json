@@ -1,0 +1,6 @@
+{
+  "name": "AI 智能创作与知识库管理系统",
+  "description": "集文档智能提分类、AI员工人格‘炼魂’、多渠道爬虫同步、业务数据对接及全域AI智能交互双向闭环于一体的创作与知识管理系统",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
