@@ -21,11 +21,12 @@ import {
   ContentTask, 
   CrawlerTask, 
   BusinessFeed, 
-  ChatMessage 
+  ChatMessage,
+  SubKnowledgeBase
 } from './types';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<SidebarTab>('workspace');
+  const [activeTab, setActiveTab ] = useState<SidebarTab>('kb');
   
   // Floating AI chatbot drawer toggle state (open from Header)
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
@@ -38,6 +39,7 @@ export default function App() {
   const [tasks, setTasks] = useState<ContentTask[]>([]);
   const [crawlers, setCrawlers] = useState<CrawlerTask[]>([]);
   const [feeds, setFeeds] = useState<BusinessFeed[]>([]);
+  const [subKbs, setSubKbs] = useState<SubKnowledgeBase[]>([]);
   const [stepDefaults, setStepDefaults] = useState({
     topicOfficerId: 'emp-1',
     researchOfficerId: 'emp-2',
@@ -60,6 +62,7 @@ export default function App() {
         setTasks(db.tasks || []);
         setCrawlers(db.crawlers || []);
         setFeeds(db.feeds || []);
+        setSubKbs(db.subKbs || []);
         if (db.stepDefaults) {
           setStepDefaults(db.stepDefaults);
         }
@@ -75,21 +78,64 @@ export default function App() {
 
   // 1. KNOWLEDGE BASE HANDLERS
 
-  const handleUploadDoc = async (title: string, content: string) => {
+  const handleUploadDoc = async (title: string, content: string, subKbId?: string, fileBase64?: string, fileType?: string) => {
     try {
       const res = await fetch('/api/kb/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, content })
+        body: JSON.stringify({ title, content, subKbId, fileBase64, fileType })
       });
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.doc) {
           setDocs(prev => [data.doc, ...prev]);
+          return { success: true, doc: data.doc };
+        } else {
+          return { success: false, error: data.error || '上传解析失败' };
+        }
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        return { success: false, error: errData.error || '服务器请求失败' };
+      }
+    } catch (err: any) {
+      console.error("Error uploading doc:", err);
+      return { success: false, error: err.message || '网络连接失败' };
+    }
+  };
+
+  const handleCreateSubKb = async (name: string, description?: string) => {
+    try {
+      const res = await fetch('/api/kb/subkbs/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, description })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.subKb) {
+          setSubKbs(prev => [...prev, data.subKb]);
         }
       }
     } catch (err) {
-      console.error("Error uploading doc:", err);
+      console.error("Error creating subkb:", err);
+    }
+  };
+
+  const handleDeleteSubKb = async (id: string) => {
+    try {
+      const res = await fetch('/api/kb/subkbs/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          await loadWorkspaceState();
+        }
+      }
+    } catch (err) {
+      console.error("Error deleting subkb:", err);
     }
   };
 
@@ -105,6 +151,24 @@ export default function App() {
       }
     } catch (err) {
       console.error("Error deleting doc:", err);
+    }
+  };
+
+  const handleMoveDoc = async (id: string, subKbId: string) => {
+    try {
+      const res = await fetch('/api/kb/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, subKbId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.doc) {
+          setDocs(prev => prev.map(d => d.id === id ? { ...d, subKbId: data.doc.subKbId } : d));
+        }
+      }
+    } catch (err) {
+      console.error("Error moving doc:", err);
     }
   };
 
@@ -126,12 +190,12 @@ export default function App() {
     }
   };
 
-  const handleSynthesizeSoul = async (fragmentIds: string[], soulName: string, soulDescription: string) => {
+  const handleSynthesizeSoul = async (docIds: string[], subKbId: string, soulName: string, soulDescription: string) => {
     try {
       const res = await fetch('/api/kb/synthesize-soul', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fragmentIds, soulName, soulDescription })
+        body: JSON.stringify({ docIds, subKbId, soulName, soulDescription })
       });
       if (res.ok) {
         const data = await res.json();
@@ -411,7 +475,7 @@ export default function App() {
         return (
           <WorkspaceHome
             docsCount={docs.length}
-            fragmentsCount={fragments.length}
+            subKbsCount={subKbs.length}
             soulsCount={souls.length}
             employeesCount={employees.length}
             tasksCount={tasks.length}
@@ -424,13 +488,15 @@ export default function App() {
         return (
           <KnowledgeBase
             docs={docs}
-            fragments={fragments}
             souls={souls}
+            subKbs={subKbs}
             onUploadDoc={handleUploadDoc}
             onDeleteDoc={handleDeleteDoc}
-            onExtractFragment={handleExtractFragment}
             onSynthesizeSoul={handleSynthesizeSoul}
             onDeleteSoul={handleDeleteSoul}
+            onCreateSubKb={handleCreateSubKb}
+            onDeleteSubKb={handleDeleteSubKb}
+            onMoveDoc={handleMoveDoc}
           />
         );
       case 'employees':
@@ -459,6 +525,7 @@ export default function App() {
         return (
           <CrawlerModule
             crawlers={crawlers}
+            docs={docs}
             onCreateCrawler={handleCreateCrawler}
             onRunCrawler={handleRunCrawler}
           />

@@ -23,6 +23,7 @@ import {
   Info
 } from 'lucide-react';
 import { KBDocument, AIEmployee, ContentTask, CandidateTopic } from '../types';
+import ContentDashboard from './ContentDashboard';
 
 interface ContentWorkbenchProps {
   tasks: ContentTask[];
@@ -59,6 +60,7 @@ export default function ContentWorkbench({
   const [researchOfficerId, setResearchOfficerId] = useState(stepDefaults.researchOfficerId);
   const [writerOfficerId, setWriterOfficerId] = useState(stepDefaults.writerOfficerId);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeWorkbenchTab, setActiveWorkbenchTab] = useState<'workbench' | 'dashboard'>('workbench');
 
   // Workflow presets widget settings toggle
   const [showPresetSettings, setShowPresetSettings] = useState(false);
@@ -199,6 +201,37 @@ export default function ContentWorkbench({
         </button>
       </div>
 
+      {/* Tab Switcher */}
+      <div className="flex border-b border-gray-200 pb-px gap-6">
+        <button
+          onClick={() => setActiveWorkbenchTab('workbench')}
+          className={`pb-3 text-sm font-bold transition-all relative cursor-pointer ${
+            activeWorkbenchTab === 'workbench'
+              ? 'text-emerald-600 font-extrabold'
+              : 'text-gray-400 hover:text-gray-600'
+          }`}
+        >
+          <span>🛠️ 智能调度生产线</span>
+          {activeWorkbenchTab === 'workbench' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-600 rounded-full" />
+          )}
+        </button>
+        <button
+          onClick={() => setActiveWorkbenchTab('dashboard')}
+          className={`pb-3 text-sm font-bold transition-all relative cursor-pointer flex items-center gap-1.5 ${
+            activeWorkbenchTab === 'dashboard'
+              ? 'text-emerald-600 font-extrabold'
+              : 'text-gray-400 hover:text-gray-600'
+          }`}
+        >
+          <span>📊 运营效能数据大盘</span>
+          <span className="bg-emerald-50 text-emerald-700 text-[9px] px-1.5 py-0.2 rounded-full font-bold">Recharts 支持</span>
+          {activeWorkbenchTab === 'dashboard' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-600 rounded-full" />
+          )}
+        </button>
+      </div>
+
       {/* Preset defaults widget drawer */}
       {showPresetSettings && (
         <div className="bg-gradient-to-r from-emerald-50 via-slate-50 to-orange-50 rounded-2xl border border-gray-150 p-6 shadow-md animate-fadeIn">
@@ -271,7 +304,10 @@ export default function ContentWorkbench({
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+      {activeWorkbenchTab === 'dashboard' ? (
+        <ContentDashboard tasks={tasks} employees={employees} />
+      ) : (
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
         
         {/* Left Aspect: Ingestion Form */}
         <div className="xl:col-span-1 space-y-8">
@@ -711,6 +747,7 @@ export default function ContentWorkbench({
         </div>
 
       </div>
+      )}
 
     </div>
   );

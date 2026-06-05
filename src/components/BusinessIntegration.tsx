@@ -28,7 +28,7 @@ interface BusinessIntegrationProps {
   onSyncAllFeeds: () => Promise<void>;
   employees: AIEmployee[];
   docs: any[]; // Knowledge base doc references list
-  onUploadDoc: (title: string, content: string) => Promise<void>;
+  onUploadDoc: (title: string, content: string, subKbId?: string, fileBase64?: string, fileType?: string) => Promise<any>;
 }
 
 export default function BusinessIntegration({

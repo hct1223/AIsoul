@@ -12,6 +12,15 @@ export interface KBDocument {
   size: string; // 如 '12 KB'
   tags: string[];
   createTime: string;
+  subKbId?: string; // 子知识库归属 ID
+  crawlerId?: string; // 关联的爬虫任务 ID
+}
+
+export interface SubKnowledgeBase {
+  id: string;
+  name: string;
+  description: string;
+  createTime: string;
 }
 
 export interface SoulFragment {
@@ -116,3 +125,17 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
 }
+
+export interface RefinementTask {
+  id: string;
+  soulName: string;
+  soulDescription: string;
+  mode: 'docs' | 'subkb';
+  sourcesCount: number;
+  status: 'pending' | 'synthesizing' | 'completed' | 'failed';
+  progress: number;
+  createTime: string;
+  completedTime?: string;
+  logMessages: string[];
+}
+

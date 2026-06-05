@@ -9,6 +9,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import mammoth from "mammoth";
 import { createServer as createViteServer } from "vite";
 import { 
   KBDocument, 
@@ -17,7 +18,8 @@ import {
   AIEmployee, 
   ContentTask, 
   CrawlerTask, 
-  BusinessFeed 
+  BusinessFeed,
+  SubKnowledgeBase
 } from "./src/types";
 
 // Resolve __dirname in ES module
@@ -219,12 +221,15 @@ const DEFAULT_CRAWLERS = [
     logs: ["任务就绪。随时可执行采集。"],
     scrapedDocsCount: 0,
     syncStatus: "pending" as const,
-    createTime: "2026-06-04 08:00"
+    createTime: "2026-06-03 16:00"
   }
 ];
 
-// Load / Initialize state safely
-let db: {
+// -----------------------------------------------------
+// DATABASE SYSTEM STATE INITIALIZATION & COGNITIVE RETRIEVAL
+// -----------------------------------------------------
+
+interface DatabaseSchema {
   docs: KBDocument[];
   fragments: SoulFragment[];
   souls: Soul[];
@@ -232,19 +237,33 @@ let db: {
   tasks: ContentTask[];
   crawlers: CrawlerTask[];
   feeds: BusinessFeed[];
+  subKbs: SubKnowledgeBase[];
   stepDefaults: {
     topicOfficerId: string;
+    topicOfficerName?: string;
     researchOfficerId: string;
+    researchOfficerName?: string;
     writerOfficerId: string;
+    writerOfficerName?: string;
   };
-} = {
-  docs: DEFAULT_DOCS as KBDocument[],
-  fragments: DEFAULT_FRAGMENTS as SoulFragment[],
-  souls: DEFAULT_SOULS as Soul[],
-  employees: DEFAULT_EMPLOYEES as AIEmployee[],
-  tasks: [] as ContentTask[],
-  crawlers: DEFAULT_CRAWLERS as CrawlerTask[],
-  feeds: INITIAL_BUSINESS_FEEDS as BusinessFeed[],
+}
+
+let db: DatabaseSchema = {
+  docs: DEFAULT_DOCS as any,
+  fragments: DEFAULT_FRAGMENTS as any,
+  souls: DEFAULT_SOULS as any,
+  employees: DEFAULT_EMPLOYEES as any,
+  tasks: [],
+  crawlers: DEFAULT_CRAWLERS as any,
+  feeds: INITIAL_BUSINESS_FEEDS as any,
+  subKbs: [
+    {
+      id: "kb-default",
+      name: "⭐ 主融合知识库",
+      description: "系统默认的主要业务底座数据库，用于储存通用的技术文档、文章摘要及核心策略方案。",
+      createTime: "2026-06-01 12:00"
+    }
+  ],
   stepDefaults: {
     topicOfficerId: "emp-1",
     researchOfficerId: "emp-2",
@@ -252,86 +271,186 @@ let db: {
   }
 };
 
-const loadDatabase = () => {
+function saveDatabase() {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2), "utf8");
+  } catch (error) {
+    console.error("Failed to save database:", error);
+  }
+}
+
+function loadDatabase() {
   try {
     if (fs.existsSync(DATA_FILE)) {
-      const content = fs.readFileSync(DATA_FILE, "utf-8");
-      const loaded = JSON.parse(content);
-      // Ensure key arrays exist
-      db = {
-        docs: loaded.docs || DEFAULT_DOCS,
-        fragments: loaded.fragments || DEFAULT_FRAGMENTS,
-        souls: loaded.souls || DEFAULT_SOULS,
-        employees: loaded.employees || DEFAULT_EMPLOYEES,
-        tasks: loaded.tasks || [],
-        crawlers: loaded.crawlers || DEFAULT_CRAWLERS,
-        feeds: loaded.feeds || INITIAL_BUSINESS_FEEDS,
-        stepDefaults: loaded.stepDefaults || {
+      const fileData = fs.readFileSync(DATA_FILE, "utf8");
+      db = JSON.parse(fileData);
+      
+      // Ensure all necessary arrays are present safely
+      if (!db.docs) db.docs = DEFAULT_DOCS as any;
+      if (!db.fragments) db.fragments = DEFAULT_FRAGMENTS as any;
+      if (!db.souls) db.souls = DEFAULT_SOULS as any;
+      if (!db.employees) db.employees = DEFAULT_EMPLOYEES as any;
+      if (!db.tasks) db.tasks = [];
+      if (!db.crawlers) db.crawlers = DEFAULT_CRAWLERS as any;
+      if (!db.feeds) db.feeds = INITIAL_BUSINESS_FEEDS as any;
+      if (!db.subKbs || db.subKbs.length === 0) {
+        db.subKbs = [
+          {
+            id: "kb-default",
+            name: "⭐ 主融合知识库",
+            description: "系统默认的主要业务底座数据库，用于储存通用的技术文档、文章摘要及核心策略方案。",
+            createTime: "2026-06-01 12:00"
+          }
+        ];
+      }
+      if (!db.stepDefaults) {
+        db.stepDefaults = {
           topicOfficerId: "emp-1",
           researchOfficerId: "emp-2",
           writerOfficerId: "emp-3"
-        }
-      };
-      console.log("Database initialized successfully from disk.");
+        };
+      }
     } else {
       saveDatabase();
     }
-  } catch (err) {
-    console.error("Failed to load local DB, falling back to in-memory state.", err);
+  } catch (error) {
+    console.error("Failed to load existing database store. Defaulting:", error);
   }
-};
+}
 
-const saveDatabase = () => {
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2), "utf-8");
-  } catch (err) {
-    console.error("Failed to write local DB to disk.", err);
-  }
-};
-
-// Boot databases
+// Fire Database hydration first
 loadDatabase();
-
-// -----------------------------------------------------
-// Server API Handlers
-// -----------------------------------------------------
 
 // Complete system state
 app.get("/api/initial-state", (req, res) => {
   res.json(db);
 });
 
-// Update standard step AI employee presets
-app.post("/api/settings/presets", (req, res) => {
-  const { topicOfficerId, researchOfficerId, writerOfficerId } = req.body;
-  db.stepDefaults = {
-    topicOfficerId: topicOfficerId || "emp-1",
-    researchOfficerId: researchOfficerId || "emp-2",
-    writerOfficerId: writerOfficerId || "emp-3"
-  };
-  saveDatabase();
-  res.json({ success: true, presets: db.stepDefaults });
-});
-
-// 1. KNOWLEDGE BASE ENDPOINTS
-
-// Upload Document with AI Auto-categorization & Auto-tagging
 app.post("/api/kb/upload", async (req, res) => {
-  const { title, content, type = "doc" } = req.body;
-  if (!title || !content) {
-    return res.status(400).json({ error: "标题和内容不能为空" });
+  const { title, content: manualContent, type = "doc", subKbId = "kb-default", fileBase64, fileType } = req.body;
+  if (!title) {
+    return res.status(400).json({ error: "标题或文件名不能为空" });
   }
 
-  const docId = "doc-" + Date.now();
-  const fileSizeBytes = Buffer.byteLength(content, 'utf8');
-  const size = fileSizeBytes > 1024 
-    ? (fileSizeBytes / 1024).toFixed(1) + " KB" 
-    : fileSizeBytes + " B";
+  let finalContent = manualContent || "";
+  let category = "日常记录";
+  let tags: string[] = ["AI自动提炼", "知识库库入库"];
+  let calculatedSize = "0 B";
 
-  let category = "智能分类中";
-  let tags: string[] = ["待分析"];
+  if (fileBase64) {
+    // We have a base64 encoded file!
+    try {
+      const buffer = Buffer.from(fileBase64, "base64");
+      const fileSizeBytes = buffer.length;
+      calculatedSize = fileSizeBytes > 1024 * 1024
+        ? (fileSizeBytes / (1024 * 1024)).toFixed(1) + " MB"
+        : fileSizeBytes > 1024
+          ? (fileSizeBytes / 1024).toFixed(1) + " KB"
+          : fileSizeBytes + " B";
 
-  if (ai) {
+      // Detect format
+      const isDocx = fileType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || title.toLowerCase().endsWith(".docx");
+      const isPdf = fileType === "application/pdf" || title.toLowerCase().endsWith(".pdf");
+      const isImage = fileType?.startsWith("image/") || title.toLowerCase().endsWith(".jpg") || title.toLowerCase().endsWith(".jpeg") || title.toLowerCase().endsWith(".png") || title.toLowerCase().endsWith(".webp") || title.toLowerCase().endsWith(".gif");
+
+      if (isDocx) {
+        // Parse .docx
+        try {
+          const mammothResult = await mammoth.extractRawText({ buffer });
+          finalContent = mammothResult.value || "Word文档无文本内容。";
+        } catch (err: any) {
+          console.error("Mammoth docx parsing failed:", err);
+          return res.status(500).json({ error: "Word文档（.docx）解析失败: " + err.message });
+        }
+      } else if ((isPdf || isImage) && ai) {
+        // Use Gemini native multi-modal extraction for PDF and image!
+        try {
+          // Double check or set proper mimeType
+          let gMimeType = fileType || "image/jpeg";
+          if (isPdf) gMimeType = "application/pdf";
+          if (title.toLowerCase().endsWith(".png")) gMimeType = "image/png";
+          if (title.toLowerCase().endsWith(".webp")) gMimeType = "image/webp";
+
+          const response = await ai.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: [
+              {
+                inlineData: {
+                  mimeType: gMimeType,
+                  data: fileBase64
+                }
+              },
+              {
+                text: `你是一个智能多模态知识库解析大师。上传的文件是一个多模态文档（PDF或图像格式）。
+                请完全阅读其展示的所有文字、文本、大纲排版、统计图表或文风记录，将其纯文本和结构化核心内容汇整提取出来，精炼为易读、重点突出的 Markdown 文本。
+
+                另外，请执行以下工作：
+                1. 给出最适切的一个分类名称（一般为2-4字，比如 '市场分析', '教程文档', '运营方案', '图片识别', '日常记录', '企业规章' 等之一）。
+                2. 提取 3-4 个相关的核心高频专名词标签。
+
+                请严格以下方格式返回 JSON 信息（不要包裹任何 \`\`\` 以外的标记）：
+                {
+                  "extractedContent": "提取出来的完整 Markdown 格式文章、文字或说明内容",
+                  "category": "分类名称",
+                  "tags": ["标签1", "标签2", "标签3"]
+                }`
+              }
+            ],
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  extractedContent: { type: Type.STRING },
+                  category: { type: Type.STRING },
+                  tags: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING }
+                  }
+                },
+                required: ["extractedContent", "category", "tags"]
+              }
+            }
+          });
+
+          const dataText = response.text?.trim() || "";
+          const resultObj = JSON.parse(dataText);
+          finalContent = resultObj.extractedContent || "PDF/图片解析结果为空";
+          category = resultObj.category || "智能识别";
+          tags = resultObj.tags || ["多模态分析"];
+        } catch (err: any) {
+          console.error("Gemini Multi-modal parsing error:", err);
+          return res.status(500).json({ error: "Gemini 多模态（PDF/图片）解析失败: " + err.message });
+        }
+      } else if (isPdf || isImage) {
+        // PDF or Image but Offline
+        category = "日常记录(离线模式)";
+        tags = ["多模态", "无AI连线"];
+        finalContent = `[离线入库提示] 由于缺少 GEMINI_API_KEY，系统无法对多模态文档（${title}）进行视觉文字识别(OCR)和内容理解。请在「设置->密钥管理」中注入有效的 GEMINI_API_KEY。`;
+      } else {
+        // Regular text file decoding
+        try {
+          finalContent = buffer.toString("utf8");
+        } catch (err) {
+          finalContent = "[解析失败] 无法将该文件解码为纯文本数据。";
+        }
+      }
+    } catch (err: any) {
+      console.error("File loading error:", err);
+      return res.status(500).json({ error: "文件读取失败: " + err.message });
+    }
+  } else {
+    // Manual text form submission
+    finalContent = manualContent || "";
+    const fileSizeBytes = Buffer.byteLength(finalContent, "utf8");
+    calculatedSize = fileSizeBytes > 1024 
+      ? (fileSizeBytes / 1024).toFixed(1) + " KB" 
+      : fileSizeBytes + " B";
+  }
+
+  // If we processed a text or word file and ai is online, we classify its text
+  const isMultimodal = title.toLowerCase().endsWith(".pdf") || title.toLowerCase().includes(".jpg") || title.toLowerCase().includes(".jpeg") || title.toLowerCase().includes(".png") || title.toLowerCase().includes(".gif");
+  if ((!fileBase64 || !isMultimodal) && ai && finalContent && finalContent.length > 5) {
     try {
       const response = await ai.models.generateContent({
         model: "gemini-3.5-flash",
@@ -347,7 +466,7 @@ app.post("/api/kb/upload", async (req, res) => {
 
 对于以下文档：
 标题：${title}
-内容（截取部分）：${content.substring(0, 1500)}`,
+内容（截取部分）：${finalContent.substring(0, 1500)}`,
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -369,29 +488,55 @@ app.post("/api/kb/upload", async (req, res) => {
       if (resultObj.category) category = resultObj.category;
       if (resultObj.tags) tags = resultObj.tags;
     } catch (err) {
-      console.error("Gemini classification integration failed, using template categorization:", err);
-      category = "日常记录";
-      tags = ["AI自动提炼", "知识库入库"];
+      console.error("Gemini text classification failed:", err);
     }
-  } else {
-    category = "日常记录(离线模式)";
-    tags = ["本地文件", "无AI分类"];
   }
 
   const newDoc = {
-    id: docId,
+    id: "doc-" + Date.now(),
     title,
-    content,
+    content: finalContent,
     type,
     category,
-    size,
+    size: calculatedSize,
     tags,
+    subKbId,
     createTime: new Date().toISOString().replace('T', ' ').substring(0, 16)
   };
 
   db.docs.unshift(newDoc);
   saveDatabase();
   res.json({ success: true, doc: newDoc });
+});
+
+// Create sub KB
+app.post("/api/kb/subkbs/create", (req, res) => {
+  const { name, description } = req.body;
+  if (!name) {
+    return res.status(400).json({ error: "知识库名称不能为空" });
+  }
+  const newSubKb = {
+    id: "kb-" + Date.now(),
+    name,
+    description: description || "自定义分类库",
+    createTime: new Date().toISOString().replace('T', ' ').substring(0, 16)
+  };
+  db.subKbs.push(newSubKb);
+  saveDatabase();
+  res.json({ success: true, subKb: newSubKb });
+});
+
+// Delete sub KB
+app.post("/api/kb/subkbs/delete", (req, res) => {
+  const { id } = req.body;
+  if (id === "kb-default") {
+    return res.status(400).json({ error: "系统默认知识库不能删除" });
+  }
+  db.subKbs = db.subKbs.filter(k => k.id !== id);
+  // Safely move docs to the default kb-default to avoid losing data
+  db.docs = db.docs.map(d => d.subKbId === id ? { ...d, subKbId: "kb-default" } : d);
+  saveDatabase();
+  res.json({ success: true });
 });
 
 // Delete document
@@ -407,124 +552,67 @@ app.post("/api/kb/delete", (req, res) => {
   }
 });
 
-// Extract Soul Fragment using Gemini (炼魂)
-app.post("/api/kb/extract-soul-fragment", async (req, res) => {
-  const { docId, fragmentName } = req.body;
-  const doc = db.docs.find(d => d.id === docId);
-  if (!doc) {
-    return res.status(404).json({ error: "文档不存在" });
+// Move document to another sub KB
+app.post("/api/kb/move", (req, res) => {
+  const { id, subKbId } = req.body;
+  const doc = db.docs.find(d => d.id === id);
+  if (doc) {
+    doc.subKbId = subKbId || "kb-default";
+    saveDatabase();
+    res.json({ success: true, doc });
+  } else {
+    res.status(404).json({ error: "Document not found" });
   }
-
-  const name = fragmentName || `${doc.title.replace(/[《》]/g, '')}的特质碎片`;
-  let traits = ["理性", "清晰"];
-  let voiceStyle = "客观客观商务说明";
-  let toneDescription = "行文有逻辑、层层深入";
-
-  if (ai) {
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: `你是一个人格特质/写作风格淬炼大师（炼魂师）。请阅读以下文本，淬炼提取作者的灵魂画像特质和独家创造风格碎片。
-1. 提取 4 个核心性格/文本调性特征（短词语，如 '极度煽情', '犀利毒舌', '专业沉稳', '学术理论', '表情狂热'）
-2. 提炼其独树一帜的“创造写作风格”（字数20字内）
-3. 概括其对话口吻调性、行文习惯、句式常态特征（字数50字内）
-
-请只输出以下JSON格式：
-{
-  "traits": ["特质1", "特质2", "特质3", "特质4"],
-  "voiceStyle": "这里写风格简述",
-  "toneDescription": "这里写对口吻、习惯字词排版的总结"
-}
-
-输入文档内容（截取部分）：
-${doc.content.substring(0, 3000)}`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              traits: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              },
-              voiceStyle: { type: Type.STRING },
-              toneDescription: { type: Type.STRING }
-            },
-            required: ["traits", "voiceStyle", "toneDescription"]
-          }
-        }
-      });
-
-      const parsed = JSON.parse(response.text?.trim() || "{}");
-      if (parsed.traits) traits = parsed.traits;
-      if (parsed.voiceStyle) voiceStyle = parsed.voiceStyle;
-      if (parsed.toneDescription) toneDescription = parsed.toneDescription;
-    } catch (err) {
-      console.error("Gemini failed to refine fragment traits:", err);
-      traits = ["客观论理性", "效率主导", "要点提炼"];
-      voiceStyle = "商务精简风格";
-      toneDescription = "行文较严谨，有清晰的因果链条论证。";
-    }
-  }
-
-  const newFragment = {
-    id: "frag-" + Date.now(),
-    name,
-    description: `从《${doc.title}》中提取。融合风格：${voiceStyle}`,
-    sourceDocId: doc.id,
-    sourceDocTitle: doc.title,
-    traits,
-    voiceStyle,
-    toneDescription,
-    createTime: new Date().toISOString().replace('T', ' ').substring(0, 16)
-  };
-
-  db.fragments.unshift(newFragment);
-  saveDatabase();
-  res.json({ success: true, fragment: newFragment });
 });
 
-// Synthesize multiple soul fragments into a single combined Soul
+// Synthesize multiple documents or an entire sub-KB directory into a single combined Soul
 app.post("/api/kb/synthesize-soul", async (req, res) => {
-  const { fragmentIds, soulName, soulDescription } = req.body;
-  if (!fragmentIds || fragmentIds.length === 0) {
-    return res.status(400).json({ error: "请选择至少一个灵魂特质碎片进行合并" });
+  const { docIds, subKbId, soulName, soulDescription } = req.body;
+  
+  let selectedDocs = [];
+  if (docIds && docIds.length > 0) {
+    selectedDocs = db.docs.filter(d => docIds.includes(d.id));
+  } else if (subKbId && subKbId !== 'all') {
+    selectedDocs = db.docs.filter(d => (d.subKbId || 'kb-default') === subKbId);
+  } else {
+    selectedDocs = db.docs;
   }
 
-  const selectedFrags = db.fragments.filter(f => fragmentIds.includes(f.id));
-  if (selectedFrags.length === 0) {
-    return res.status(400).json({ error: "选中的碎片在库中不存在" });
+  if (selectedDocs.length === 0) {
+    return res.status(400).json({ error: "选择的范围内无任何业务文档，无法炼化灵魂。" });
   }
 
-  const combinedName = soulName || `${selectedFrags[0].name.substring(0, 5)}...合魂体`;
-  const defaultDesc = soulDescription || `复合型灵魂人格特征。整合自 [${selectedFrags.map(f => f.name).join(", ")}]。`;
+  const combinedName = soulName || `${selectedDocs[0].title.replace(/[《》]/g, '').substring(0, 5)}...的文脉灵魂`;
+  const defaultDesc = soulDescription || `融合淬炼自: ${selectedDocs.slice(0, 3).map(d => d.title).join("、")}${selectedDocs.length > 3 ? "等" : ""}的高价值业务文献特质。`;
 
-  let combinedTraits = [...new Set(selectedFrags.flatMap(f => f.traits))].slice(0, 5);
-  let creativeStyle = "高度整合创意风";
-  let toneDescription = "整合多重人格。可以适应多元的场景切换。";
+  let combinedTraits = ["专业严谨", "表达幽默", "洞察非凡"];
+  let creativeStyle = "多层次混合风";
+  let toneDescription = "基于选定文档整合出的深度AI调性。";
 
   if (ai) {
     try {
-      const summaryOfInputs = selectedFrags.map((f, i) => 
-        `碎片[${i+1}]: 名字: ${f.name}. 核心特质: ${f.traits.join("/")}. 创作风格: ${f.voiceStyle}. 口吻习惯: ${f.toneDescription}.`
-      ).join("\n");
+      const summaryOfInputs = selectedDocs.map((doc, i) => 
+        `文档[${i+1}]: 标题: ${doc.title}. 智能分类: ${doc.category}. 核心标签: ${doc.tags.join(",")}. 内容摘要: ${doc.content.substring(0, 500).replace(/\n/g, ' ')}...`
+      ).join("\n\n");
 
       const response = await ai.models.generateContent({
         model: "gemini-3.5-flash",
-        contents: `你是一个灵魂融合术士。现在需要将多个来自不同书籍/文稿提取出的“写性特征碎片”融合成一套高契合度的完整AI雇员灵魂。
-灵魂名称：${combinedName}
-输入的多方灵魂碎片细则：
+        contents: `你是一个顶级的灵魂合成融合大师。现在的目标是深度淬火分析并提取以下多份企业业务/写作文档的语气特征、行文习惯和专业特质，从而融合成一个完整的深度AI雇员角色语调/最终灵魂 (Soul Persona)。
+
+输入的文档摘要组包如下：
 ${summaryOfInputs}
 
-请思考：这些独立的碎片该如何有机结合？它们之间的风格冲突该如何调和，以演变成一套既具有深度思考又具有爆款包装力的全新‘灵魂人格’？
-请输出JSON配置：
+预计融合大名称：${combinedName}
+
+请提炼出一个有机平衡、多才多艺的大模型角色风格（特别需要平衡严谨干货与网感爆款特性）。
+请直接输出以下JSON格式配置，千万不可包含任何markdown的反引号或包裹符：
 {
-  "combinedTraits": ["新特质1", "新特质2", "新特质3", "新特质4"],
-  "creativeStyle": "新融合写作风格阐述(20字内)",
-  "toneDescription": "融合特征后的发声对话与文案书写习惯描述（50字内）"
+  "combinedTraits": ["提炼词特质1", "特质2", "特质3", "特质4"],
+  "creativeStyle": "新融合写作风格叙述(15字内)",
+  "toneDescription": "口吻语调与发帖排架习惯描述（45字内）"
 }
 
-请注意只输出合法解开无包装的JSON代码。`,
+只返回纯正JSON，千万不要用Markdown格式包裹！不要任何干扰字符。`,
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -547,7 +635,7 @@ ${summaryOfInputs}
       if (parsed.creativeStyle) creativeStyle = parsed.creativeStyle;
       if (parsed.toneDescription) toneDescription = parsed.toneDescription;
     } catch (err) {
-      console.error("Gemini failed to synthesize soul:", err);
+      console.error("Gemini failed to synthesize soul directly:", err);
     }
   }
 
@@ -555,7 +643,7 @@ ${summaryOfInputs}
     id: "soul-" + Date.now(),
     name: combinedName,
     description: defaultDesc,
-    fragmentIds,
+    fragmentIds: [],
     combinedTraits,
     creativeStyle,
     toneDescription,
@@ -1166,7 +1254,8 @@ app.post("/api/crawlers/run", async (req, res) => {
         category: "爬虫数据自动归档",
         size: ((Buffer.byteLength(content, 'utf8')) / 1024).toFixed(1) + " KB",
         tags: ["网络公开素材", crawl.platform, "爬虫自动归档"],
-        createTime: new Date().toISOString().replace('T', ' ').substring(0, 16)
+        createTime: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        crawlerId: crawl.id
       };
 
       db.docs.unshift(resultDoc);
@@ -1192,7 +1281,8 @@ app.post("/api/crawlers/run", async (req, res) => {
         category: "爬虫数据自动归档",
         size: "1.2 KB",
         tags: ["网络公开素材", crawl.platform, "排版干货"],
-        createTime: new Date().toISOString().replace('T', ' ').substring(0, 16)
+        createTime: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        crawlerId: crawl.id
       };
       db.docs.unshift(resultDoc);
       crawl.scrapedDocsCount = 1;

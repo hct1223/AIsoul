@@ -21,7 +21,7 @@ import { SidebarTab } from './Sidebar';
 
 interface WorkspaceHomeProps {
   docsCount: number;
-  fragmentsCount: number;
+  subKbsCount: number;
   soulsCount: number;
   employeesCount: number;
   tasksCount: number;
@@ -32,7 +32,7 @@ interface WorkspaceHomeProps {
 
 export default function WorkspaceHome({
   docsCount,
-  fragmentsCount,
+  subKbsCount,
   soulsCount,
   employeesCount,
   tasksCount,
@@ -42,8 +42,8 @@ export default function WorkspaceHome({
 }: WorkspaceHomeProps) {
   const bentoStats = [
     { label: '融合知识库文献', count: `${docsCount} 篇`, icon: Database, tab: 'kb' as const, bg: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100/50' },
-    { label: '提炼灵魂碎片', count: `${fragmentsCount} 个`, icon: Sparkles, tab: 'kb' as const, bg: 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100/50' },
-    { label: '装配灵魂人设', count: `${soulsCount} 具`, icon: Shuffle, tab: 'kb' as const, bg: 'bg-orange-50 text-orange-700 hover:bg-orange-100/50' },
+    { label: '分类子知识库', count: `${subKbsCount} 个分册`, icon: Sparkles, tab: 'kb' as const, bg: 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100/50' },
+    { label: '装配最终灵魂', count: `${soulsCount} 具`, icon: Shuffle, tab: 'kb' as const, bg: 'bg-orange-50 text-orange-700 hover:bg-orange-100/50' },
     { label: '智能虚拟常驻员工', count: `${employeesCount} 位`, icon: Cpu, tab: 'employees' as const, bg: 'bg-blue-50 text-blue-700 hover:bg-blue-100/50' },
     { label: '多渠道独立爬虫', count: `${crawlersCount} 组`, icon: Globe, tab: 'crawler' as const, bg: 'bg-purple-50 text-purple-700 hover:bg-purple-100/50' },
     { label: '业务系统同步线', count: `${feedsCount} 条活跃`, icon: Share2, tab: 'business' as const, bg: 'bg-pink-50 text-pink-700 hover:bg-pink-100/50' },
@@ -124,9 +124,9 @@ export default function WorkspaceHome({
               <span className="absolute -left-[27px] top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-black font-mono text-white">
                 1
               </span>
-              <h4 className="text-xs font-bold text-gray-900">融合知识库与「合魂合成」技术</h4>
+              <h4 className="text-xs font-bold text-gray-900">融合知识库与「直接炼魂」技术</h4>
               <p className="text-[11px] text-gray-550 leading-relaxed mt-1">
-                支持行业资料、微信旧文批量导入。系统智能分类打上标签。支持选中某个爆款指南长文提取「灵魂碎片」(voice traits)；并能将多个碎片的写作习惯、发声倾向熔炼，生成综合「最终灵魂（Soul）」。
+                支持高价值业务资料、新媒体爆款文稿的导入及分册归档，并支持直接勾选多份优质文献或选择指定子知识库直接进行高内聚AI熔熔炼，一站式生成独特的创作系「最终灵魂（Soul）」。
               </p>
             </div>
 
